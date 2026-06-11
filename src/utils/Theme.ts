@@ -1,0 +1,50 @@
+// src/utils/theme.ts
+export const Colors = {
+  bg: '#0A0A0F',
+  bgCard: '#13131A',
+  bgElevated: '#1C1C26',
+  bgSurface: '#222230',
+  accent: '#00E5C9',
+  accentDim: '#00B09E',
+  accentGlow: 'rgba(0, 229, 201, 0.15)',
+  amber: '#F5A623',
+  amberDim: '#C47D0E',
+  success: '#27D9A0',
+  warning: '#F5A623',
+  error: '#FF5A65',
+  info: '#5B8DEF',
+  textPrimary: '#F0F0F8',
+  textSecondary: '#9090A8',
+  textMuted: '#5A5A70',
+  textInverse: '#0A0A0F',
+  border: '#2A2A3A',
+  borderBright: '#3A3A50',
+};
+
+export const invoiceTypeColors: Record<string, string> = {
+  TAX_INVOICE: '#00E5C9',
+  DELIVERY_CHALLAN: '#F5A623',
+  EWAY_BILL: '#5B8DEF',
+  PAYMENT_ADVICE: '#A78BFA',
+  OTHER: '#9090A8',
+  PROFORMA: '#5B8DEF',
+  CREDIT_NOTE: '#27D9A0',
+  DEBIT_NOTE: '#FF5A65',
+  PURCHASE_ORDER: '#F5A623',
+  RECEIPT: '#A78BFA',
+  INVOICE: '#9090A8',
+};
+
+export const invoiceTypeLabels: Record<string, string> = {
+  TAX_INVOICE: 'Tax Invoice',
+  DELIVERY_CHALLAN: 'Delivery Challan',
+  EWAY_BILL: 'e-Way Bill',
+  PAYMENT_ADVICE: 'Payment Advice',
+  OTHER: 'Document',
+  PROFORMA: 'Proforma',
+  CREDIT_NOTE: 'Credit Note',
+  DEBIT_NOTE: 'Debit Note',
+  PURCHASE_ORDER: 'Purchase Order',
+  RECEIPT: 'Receipt',
+  INVOICE: 'Invoice',
+};
