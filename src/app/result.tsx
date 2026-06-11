@@ -343,6 +343,49 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
           ))}
         </Section>
       )}
+
+      {(g.TaxableValue != null ||
+        g.CGSTAmount != null ||
+        g.SGSTAmount != null ||
+        g.IGSTAmount != null ||
+        g.TotalTaxAmount != null ||
+        g.InvoiceTotal != null) && (
+        <Section title="TAX SUMMARY" icon="calculator-outline" color={Colors.info}>
+          {g.TaxableValue != null && (
+            <InfoRow label="Taxable Value" value={formatINR(g.TaxableValue)} />
+          )}
+          {g.CGSTAmount != null && (
+            <InfoRow
+              label={`CGST${g.CGSTRate != null ? ` @${g.CGSTRate}%` : ''}`}
+              value={formatINR(g.CGSTAmount)}
+            />
+          )}
+          {g.SGSTAmount != null && (
+            <InfoRow
+              label={`SGST${g.SGSTRate != null ? ` @${g.SGSTRate}%` : ''}`}
+              value={formatINR(g.SGSTAmount)}
+            />
+          )}
+          {g.IGSTAmount != null && (
+            <InfoRow
+              label={`IGST${g.IGSTRate != null ? ` @${g.IGSTRate}%` : ''}`}
+              value={formatINR(g.IGSTAmount)}
+            />
+          )}
+          {g.TotalTaxAmount != null && (
+            <InfoRow label="Total Tax" value={formatINR(g.TotalTaxAmount)} />
+          )}
+          {g.RoundOff != null && (
+            <InfoRow label="Round Off" value={formatINR(g.RoundOff)} />
+          )}
+          {g.InvoiceTotal != null && (
+            <View style={styles.grandTotalRow}>
+              <Text style={styles.grandTotalLabel}>Invoice Total</Text>
+              <Text style={styles.grandTotalValue}>{formatINR(g.InvoiceTotal)}</Text>
+            </View>
+          )}
+        </Section>
+      )}
     </>
   );
 }

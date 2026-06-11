@@ -76,6 +76,16 @@ const GOODS_SCHEMA = {
     LRNo: { type: 'STRING', nullable: true },
     Transporter: { type: 'STRING', nullable: true },
     Items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
+    TaxableValue: { type: 'NUMBER', nullable: true },
+    CGSTRate: { type: 'NUMBER', nullable: true },
+    CGSTAmount: { type: 'NUMBER', nullable: true },
+    SGSTRate: { type: 'NUMBER', nullable: true },
+    SGSTAmount: { type: 'NUMBER', nullable: true },
+    IGSTRate: { type: 'NUMBER', nullable: true },
+    IGSTAmount: { type: 'NUMBER', nullable: true },
+    TotalTaxAmount: { type: 'NUMBER', nullable: true },
+    RoundOff: { type: 'NUMBER', nullable: true },
+    InvoiceTotal: { type: 'NUMBER', nullable: true },
   },
 } as const;
 
@@ -159,6 +169,12 @@ For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" an
   - Rate: per-unit price (numeric).
   - Qty: quantity (numeric).
   - BatchNo: lot / batch number if present, else null.
+- Document-level tax summary (from the HSN/SAC tax table or the tax rows near the total — one set per document):
+  - TaxableValue: the total taxable value (taxable amount before tax).
+  - CGSTRate / CGSTAmount, SGSTRate / SGSTAmount, IGSTRate / IGSTAmount: the % rate and the rupee amount for each tax head. Intra-state invoices have CGST + SGST (leave IGST null); inter-state invoices have IGST only (leave CGST/SGST null). Use null for any head not present.
+  - TotalTaxAmount: total tax (CGST + SGST + IGST).
+  - RoundOff: rounding adjustment near the grand total (may be negative), else null.
+  - InvoiceTotal: the final grand total payable (taxable value + tax + round off).
 
 For PAYMENT_ADVICE fill "paymentAdvice" and set "goods" to null:
 - Payer (who is paying / on whose behalf), PaymentRef (UTR / instrument no), PaymentDate, GrandTotal.
@@ -266,6 +282,16 @@ function parsedInvoiceToGoodsDoc(p: ParsedInvoice): GoodsDoc {
       Qty: i.quantity ?? null,
       BatchNo: null,
     })),
+    TaxableValue: p.totals?.subtotal ?? null,
+    CGSTRate: p.taxes?.cgst?.rate ?? null,
+    CGSTAmount: p.taxes?.cgst?.amount ?? null,
+    SGSTRate: p.taxes?.sgst?.rate ?? null,
+    SGSTAmount: p.taxes?.sgst?.amount ?? null,
+    IGSTRate: p.taxes?.igst?.rate ?? null,
+    IGSTAmount: p.taxes?.igst?.amount ?? null,
+    TotalTaxAmount: p.totals?.taxAmount ?? null,
+    RoundOff: p.totals?.roundOff ?? null,
+    InvoiceTotal: p.totals?.grandTotal ?? null,
   };
 }
 

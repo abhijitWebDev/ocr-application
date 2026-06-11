@@ -41,6 +41,17 @@ export interface GoodsDoc {
   LRNo: string | null;
   Transporter: string | null;
   Items: GoodsItem[];
+  // Document-level tax summary (from the HSN/SAC tax block).
+  TaxableValue: number | null;
+  CGSTRate: number | null;
+  CGSTAmount: number | null;
+  SGSTRate: number | null;
+  SGSTAmount: number | null;
+  IGSTRate: number | null;
+  IGSTAmount: number | null;
+  TotalTaxAmount: number | null;
+  RoundOff: number | null;
+  InvoiceTotal: number | null;
 }
 
 export interface PaymentReference {
@@ -85,11 +96,12 @@ export function docTitle(doc: ExtractedDocument): string {
 }
 
 /**
- * Headline monetary value for display only (NOT part of the exported JSON).
- * Goods totals are derived from Rate × Qty since the contract has no amount field.
+ * Headline monetary value for display. Prefers the invoice's printed
+ * InvoiceTotal (tax-inclusive); falls back to the Rate × Qty subtotal.
  */
 export function docTotal(doc: ExtractedDocument): number | null {
   if (doc.goods) {
+    if (doc.goods.InvoiceTotal != null) return doc.goods.InvoiceTotal;
     const sum = (doc.goods.Items ?? []).reduce(
       (s, i) => s + (i.Rate ?? 0) * (i.Qty ?? 0),
       0,
