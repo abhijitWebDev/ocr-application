@@ -21,6 +21,8 @@ import {
   docLineCount,
   docRef,
   docTitle,
+  docTotal,
+  lineAmount,
   type ExtractedDocument,
   type ExtractionResult,
 } from '../utils/Schema';
@@ -29,8 +31,8 @@ import { Colors, invoiceTypeColors, invoiceTypeLabels } from '../utils/Theme';
 
 function cleanExport(doc: ExtractedDocument): object {
   return doc.docType === 'PAYMENT_ADVICE'
-    ? { docType: doc.docType, ...(doc.paymentAdvice ?? {}) }
-    : { docType: doc.docType, ...(doc.goods ?? {}) };
+    ? (doc.paymentAdvice ?? {})
+    : (doc.goods ?? {});
 }
 
 function buildShareText(doc: ExtractedDocument): string {
@@ -38,29 +40,28 @@ function buildShareText(doc: ExtractedDocument): string {
   if (doc.docType === 'PAYMENT_ADVICE' && doc.paymentAdvice) {
     const p = doc.paymentAdvice;
     return [
-      `${label} — ${p.payer || ''}`,
-      p.paymentRef ? `UTR: ${p.paymentRef}` : '',
-      p.paymentDate ? `Date: ${p.paymentDate}` : '',
-      `References: ${p.references?.length ?? 0}`,
-      `TOTAL: ${formatINR(p.grandTotal)}`,
+      `${label} — ${p.Payer || ''}`,
+      p.PaymentRef ? `UTR: ${p.PaymentRef}` : '',
+      p.PaymentDate ? `Date: ${p.PaymentDate}` : '',
+      `References: ${p.References?.length ?? 0}`,
+      `TOTAL: ${formatINR(p.GrandTotal)}`,
     ]
       .filter(Boolean)
       .join('\n');
   }
   const g = doc.goods;
   return [
-    `${label} — ${g?.supplier || ''}`,
-    g?.invoiceNo ? `Invoice #: ${g.invoiceNo}` : '',
-    g?.challanNo ? `Challan #: ${g.challanNo}` : '',
-    g?.invoiceDate ? `Date: ${g.invoiceDate}` : '',
+    `${label} — ${g?.Supplier || ''}`,
+    g?.InvoiceNo ? `Invoice #: ${g.InvoiceNo}` : '',
+    g?.ChallanNo ? `Challan #: ${g.ChallanNo}` : '',
+    g?.InvoiceDate ? `Date: ${g.InvoiceDate}` : '',
     '',
-    ...(g?.items ?? []).map(
+    ...(g?.Items ?? []).map(
       (i) =>
-        `• ${i.itemDesc} (${i.qty ?? ''} ${i.unit ?? ''}) — ${formatINR(i.amount)}`,
+        `• ${i.ItemDesc} (${i.Qty ?? ''}) — ${formatINR(lineAmount(i))}`,
     ),
     '',
-    g?.taxAmount ? `Tax: ${formatINR(g.taxAmount)}` : '',
-    `TOTAL: ${formatINR(g?.invoiceTotal)}`,
+    `TOTAL: ${formatINR(docTotal(doc))}`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -198,21 +199,13 @@ export default function ResultScreen() {
           color={Colors.accent}
           label={`${docLineCount(doc)} ${doc.docType === 'PAYMENT_ADVICE' ? 'refs' : 'items'}`}
         />
-        {doc.docType === 'PAYMENT_ADVICE'
-          ? doc.paymentAdvice?.grandTotal != null && (
-              <Pill
-                icon="cash-outline"
-                color={Colors.amber}
-                label={`${doc.paymentAdvice.grandTotal.toLocaleString('en-IN')} INR`}
-              />
-            )
-          : doc.goods?.invoiceTotal != null && (
-              <Pill
-                icon="cash-outline"
-                color={Colors.amber}
-                label={`${doc.goods.invoiceTotal.toLocaleString('en-IN')} INR`}
-              />
-            )}
+        {docTotal(doc) != null && (
+          <Pill
+            icon="cash-outline"
+            color={Colors.amber}
+            label={`${docTotal(doc)!.toLocaleString('en-IN')} INR`}
+          />
+        )}
       </View>
 
       <ScrollView
@@ -288,62 +281,41 @@ export default function ResultScreen() {
 function renderGoods(doc: ExtractedDocument, typeColor: string) {
   const g = doc.goods;
   if (!g) return null;
-  const hasDispatch = !!(g.vehicleNo || g.lrNo || g.transporter || g.eWayBillNo);
+  const hasDispatch = !!(g.VehicleNo || g.LRNo || g.Transporter);
   return (
     <>
       <Section title="DOCUMENT INFO" icon="document-text-outline" color={Colors.accent}>
-        <InfoRow label="Invoice No" value={g.invoiceNo} mono />
-        <InfoRow label="Invoice Date" value={g.invoiceDate} />
-        <InfoRow label="Challan No" value={g.challanNo} mono />
-        <InfoRow label="Challan Date" value={g.challanDate} />
-        <InfoRow label="PO No" value={g.poNo} mono />
+        <InfoRow label="Invoice No" value={g.InvoiceNo} mono />
+        <InfoRow label="Invoice Date" value={g.InvoiceDate} />
+        <InfoRow label="Challan No" value={g.ChallanNo} mono />
+        <InfoRow label="Challan Date" value={g.ChallanDate} />
       </Section>
 
-      {(g.supplier || g.supplierGSTNo) && (
+      {(g.Supplier || g.SupplierGSTNo) && (
         <Section title="SUPPLIER" icon="business-outline" color={Colors.info}>
-          <InfoRow label="Name" value={g.supplier} bold />
-          <InfoRow label="GST No" value={g.supplierGSTNo} mono />
+          <InfoRow label="Name" value={g.Supplier} bold />
+          <InfoRow label="GST No" value={g.SupplierGSTNo} mono />
         </Section>
       )}
 
       {hasDispatch && (
         <Section title="DISPATCH" icon="car-outline" color={Colors.textSecondary}>
-          <InfoRow label="e-Way Bill" value={g.eWayBillNo} mono />
-          <InfoRow label="Vehicle No" value={g.vehicleNo} mono />
-          <InfoRow label="LR No" value={g.lrNo} mono />
-          <InfoRow label="Transporter" value={g.transporter} />
+          <InfoRow label="Vehicle No" value={g.VehicleNo} mono />
+          <InfoRow label="LR No" value={g.LRNo} mono />
+          <InfoRow label="Transporter" value={g.Transporter} />
         </Section>
       )}
 
-      {(g.taxableValue != null || g.taxAmount != null || g.invoiceTotal != null) && (
-        <Section title="TOTALS" icon="receipt-outline" color={Colors.amber}>
-          <InfoRow
-            label="Taxable Value"
-            value={g.taxableValue != null ? formatINR(g.taxableValue) : null}
-          />
-          <InfoRow
-            label="Tax (GST)"
-            value={g.taxAmount != null ? formatINR(g.taxAmount) : null}
-          />
-          {g.invoiceTotal != null && (
-            <View style={styles.grandTotalRow}>
-              <Text style={styles.grandTotalLabel}>Invoice Total</Text>
-              <Text style={styles.grandTotalValue}>{formatINR(g.invoiceTotal)}</Text>
-            </View>
-          )}
-        </Section>
-      )}
-
-      {(g.items?.length ?? 0) > 0 && (
+      {(g.Items?.length ?? 0) > 0 && (
         <Section
-          title={`LINE ITEMS (${g.items.length})`}
+          title={`LINE ITEMS (${g.Items.length})`}
           icon="list-outline"
           color={Colors.accent}
         >
-          {g.items.map((item, idx) => (
+          {g.Items.map((item, idx) => (
             <View
               key={idx}
-              style={[styles.lineItem, idx === g.items.length - 1 && { borderBottomWidth: 0 }]}
+              style={[styles.lineItem, idx === g.Items.length - 1 && { borderBottomWidth: 0 }]}
             >
               <View style={styles.lineItemLeft}>
                 <View style={[styles.lineItemNum, { backgroundColor: typeColor + '22' }]}>
@@ -352,21 +324,21 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
                   </Text>
                 </View>
                 <View style={styles.lineItemBody}>
-                  <Text style={styles.lineItemDesc}>{item.itemDesc}</Text>
+                  <Text style={styles.lineItemDesc}>{item.ItemDesc}</Text>
                   <Text style={styles.lineItemMeta}>
                     {[
-                      item.qty != null
-                        ? `Qty: ${item.qty}${item.unit ? ' ' + item.unit : ''}`
-                        : null,
-                      item.rate != null ? `@ ${formatINR(item.rate)}` : null,
-                      item.batchNo ? `Batch: ${item.batchNo}` : null,
+                      item.Qty != null ? `Qty: ${item.Qty}` : null,
+                      item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
+                      item.PONo ? `PO: ${item.PONo}` : null,
+                      item.ItemNo ? `Item: ${item.ItemNo}` : null,
+                      item.BatchNo ? `Batch: ${item.BatchNo}` : null,
                     ]
                       .filter(Boolean)
                       .join('  ')}
                   </Text>
                 </View>
               </View>
-              <Text style={styles.lineItemAmount}>{formatINR(item.amount)}</Text>
+              <Text style={styles.lineItemAmount}>{formatINR(lineAmount(item))}</Text>
             </View>
           ))}
         </Section>
@@ -381,49 +353,49 @@ function renderPaymentAdvice(doc: ExtractedDocument) {
   return (
     <>
       <Section title="PAYMENT INFO" icon="cash-outline" color={Colors.accent}>
-        <InfoRow label="Payer" value={p.payer} bold />
-        <InfoRow label="UTR / Ref" value={p.paymentRef} mono />
-        <InfoRow label="Date" value={p.paymentDate} />
-        {p.grandTotal != null && (
+        <InfoRow label="Payer" value={p.Payer} bold />
+        <InfoRow label="UTR / Ref" value={p.PaymentRef} mono />
+        <InfoRow label="Date" value={p.PaymentDate} />
+        {p.GrandTotal != null && (
           <View style={styles.grandTotalRow}>
             <Text style={styles.grandTotalLabel}>Grand Total</Text>
-            <Text style={styles.grandTotalValue}>{formatINR(p.grandTotal)}</Text>
+            <Text style={styles.grandTotalValue}>{formatINR(p.GrandTotal)}</Text>
           </View>
         )}
       </Section>
 
-      {(p.references?.length ?? 0) > 0 && (
+      {(p.References?.length ?? 0) > 0 && (
         <Section
-          title={`REFERENCES (${p.references.length})`}
+          title={`REFERENCES (${p.References.length})`}
           icon="list-outline"
           color={Colors.info}
         >
-          {p.references.map((ref, idx) => (
+          {p.References.map((ref, idx) => (
             <View
               key={idx}
               style={[
                 styles.lineItem,
-                idx === p.references.length - 1 && { borderBottomWidth: 0 },
+                idx === p.References.length - 1 && { borderBottomWidth: 0 },
               ]}
             >
               <View style={styles.lineItemLeft}>
                 <View style={styles.lineItemBody}>
                   <Text style={styles.lineItemDesc}>
-                    {ref.docNo || ref.grnNo || ref.poNo || `Ref ${idx + 1}`}
+                    {ref.DocNo || ref.GRNNo || ref.PONo || `Ref ${idx + 1}`}
                   </Text>
                   <Text style={styles.lineItemMeta}>
                     {[
-                      ref.poNo ? `PO: ${ref.poNo}` : null,
-                      ref.grnNo ? `GRN: ${ref.grnNo}` : null,
-                      ref.docDate,
-                      ref.deduction != null ? `TDS: ${formatINR(ref.deduction)}` : null,
+                      ref.PONo ? `PO: ${ref.PONo}` : null,
+                      ref.GRNNo ? `GRN: ${ref.GRNNo}` : null,
+                      ref.DocDate,
+                      ref.Deduction != null ? `TDS: ${formatINR(ref.Deduction)}` : null,
                     ]
                       .filter(Boolean)
                       .join('  ')}
                   </Text>
                 </View>
               </View>
-              <Text style={styles.lineItemAmount}>{formatINR(ref.amount)}</Text>
+              <Text style={styles.lineItemAmount}>{formatINR(ref.Amount)}</Text>
             </View>
           ))}
         </Section>

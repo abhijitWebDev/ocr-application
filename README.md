@@ -13,8 +13,8 @@ The app runs entirely on-device — there is no backend. OCR is performed by cal
   - unrelated documents → **separate** records.
 - **Structured extraction** — Gemini returns a typed `{ documents: [...] }` envelope via JSON schema (structured output), so there's no fragile text parsing.
 - **Two document shapes** (discriminated by `docType`):
-  - **Goods** (`TAX_INVOICE` / `DELIVERY_CHALLAN` / `EWAY_BILL`) — supplier, GSTIN, invoice/challan no & date, header PO no, e-Way/vehicle/LR/transporter, line items (description, qty + **unit**, rate, **amount**, batch), taxable value, tax, invoice total.
-  - **Payment advice** (`PAYMENT_ADVICE`) — payer, UTR/reference, date, grand total, and a table of settled invoice references (PO / Doc / GRN, invoice amount, TDS/deduction, net paid).
+  - **Goods** (`TAX_INVOICE` / `DELIVERY_CHALLAN` / `EWAY_BILL`) — Supplier, SupplierGSTNo, Invoice/Challan no & date, Vehicle/LR/Transporter, and per-item `Items[]` (PONo, ItemNo, ItemDesc, Rate, Qty, BatchNo).
+  - **Payment advice** (`PAYMENT_ADVICE`) — Payer, PaymentRef (UTR), PaymentDate, GrandTotal, and a `References[]` table of settled invoices (PONo / DocNo / GRNNo, InvoiceAmount, Deduction, Amount).
 - **History** — every extracted document is stored locally (up to 100), searchable by name or reference, with type badges and totals.
 - **Share & Save** — share a text summary, or POST the full `{ documents, username }` payload to your configured endpoint.
 - **Graceful fallback** — if the Gemini call fails, the app falls back to Google Vision raw-text OCR + a regex parser, one document per input.
@@ -94,33 +94,27 @@ npx expo start -c
 
 ## Output shape
 
+Each document in `documents[]` carries either a goods object or a payment-advice object (discriminated internally by `docType`). The goods shape:
+
 ```jsonc
 {
-  "documents": [
-    {
-      "docType": "TAX_INVOICE",
-      "supplier": "Arihant Gold Plast Pvt Ltd",
-      "supplierGSTNo": "26AAJCS6082N1ZO",
-      "invoiceNo": "SAT/2526/001642",
-      "invoiceDate": "06/03/2026",
-      "challanNo": null,
-      "poNo": "USK/25-26/1474",
-      "eWayBillNo": "612071250314",
-      "vehicleNo": "DD01-A-9334",
-      "transporter": null,
-      "items": [
-        { "itemDesc": "Polypropylene Sheets & Rolls", "qty": 2514.40,
-          "unit": "KG", "rate": 134.24, "amount": 337533.00, "batchNo": null }
-      ],
-      "taxableValue": 337533.00,
-      "taxAmount": 60756.00,
-      "invoiceTotal": 398289.00
-    }
+  "Supplier": "ABC Steel Pvt Ltd",
+  "SupplierGSTNo": "27ABCDE1234F1Z5",
+  "ChallanNo": "CH12345",
+  "ChallanDate": "10-06-2026",
+  "InvoiceNo": "INV56789",
+  "InvoiceDate": "10-06-2026",
+  "VehicleNo": "MH12AB1234",
+  "LRNo": "LR98765",
+  "Transporter": "XYZ Logistics",
+  "Items": [
+    { "PONo": "PO1001", "ItemNo": "ITM001", "ItemDesc": "MS Round Bar 25mm",
+      "Rate": 125.50, "Qty": 100, "BatchNo": "HC001" }
   ]
 }
 ```
 
-Payment-advice documents instead carry a `paymentAdvice` object (`payer`, `paymentRef`, `paymentDate`, `grandTotal`, `references[]`). See `src/utils/Schema.ts` for the full type definitions.
+Payment-advice documents instead carry `Payer`, `PaymentRef`, `PaymentDate`, `GrandTotal`, and a `References[]` array. See `src/utils/Schema.ts` for the full type definitions.
 
 ## Quality checks
 

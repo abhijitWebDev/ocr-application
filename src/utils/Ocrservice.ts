@@ -52,37 +52,30 @@ function generateId(): string {
 const GOODS_ITEM_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    itemNo: { type: 'STRING', nullable: true },
-    itemDesc: { type: 'STRING' },
-    hsnCode: { type: 'STRING', nullable: true },
-    qty: { type: 'NUMBER', nullable: true },
-    unit: { type: 'STRING', nullable: true },
-    rate: { type: 'NUMBER', nullable: true },
-    amount: { type: 'NUMBER', nullable: true },
-    batchNo: { type: 'STRING', nullable: true },
+    PONo: { type: 'STRING', nullable: true },
+    ItemNo: { type: 'STRING', nullable: true },
+    ItemDesc: { type: 'STRING' },
+    Rate: { type: 'NUMBER', nullable: true },
+    Qty: { type: 'NUMBER', nullable: true },
+    BatchNo: { type: 'STRING', nullable: true },
   },
-  required: ['itemDesc'],
+  required: ['ItemDesc'],
 } as const;
 
 const GOODS_SCHEMA = {
   type: 'OBJECT',
   nullable: true,
   properties: {
-    supplier: { type: 'STRING', nullable: true },
-    supplierGSTNo: { type: 'STRING', nullable: true },
-    invoiceNo: { type: 'STRING', nullable: true },
-    invoiceDate: { type: 'STRING', nullable: true },
-    challanNo: { type: 'STRING', nullable: true },
-    challanDate: { type: 'STRING', nullable: true },
-    poNo: { type: 'STRING', nullable: true },
-    eWayBillNo: { type: 'STRING', nullable: true },
-    vehicleNo: { type: 'STRING', nullable: true },
-    lrNo: { type: 'STRING', nullable: true },
-    transporter: { type: 'STRING', nullable: true },
-    items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
-    taxableValue: { type: 'NUMBER', nullable: true },
-    taxAmount: { type: 'NUMBER', nullable: true },
-    invoiceTotal: { type: 'NUMBER', nullable: true },
+    Supplier: { type: 'STRING', nullable: true },
+    SupplierGSTNo: { type: 'STRING', nullable: true },
+    ChallanNo: { type: 'STRING', nullable: true },
+    ChallanDate: { type: 'STRING', nullable: true },
+    InvoiceNo: { type: 'STRING', nullable: true },
+    InvoiceDate: { type: 'STRING', nullable: true },
+    VehicleNo: { type: 'STRING', nullable: true },
+    LRNo: { type: 'STRING', nullable: true },
+    Transporter: { type: 'STRING', nullable: true },
+    Items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
   },
 } as const;
 
@@ -90,22 +83,22 @@ const PAYMENT_ADVICE_SCHEMA = {
   type: 'OBJECT',
   nullable: true,
   properties: {
-    payer: { type: 'STRING', nullable: true },
-    paymentRef: { type: 'STRING', nullable: true },
-    paymentDate: { type: 'STRING', nullable: true },
-    grandTotal: { type: 'NUMBER', nullable: true },
-    references: {
+    Payer: { type: 'STRING', nullable: true },
+    PaymentRef: { type: 'STRING', nullable: true },
+    PaymentDate: { type: 'STRING', nullable: true },
+    GrandTotal: { type: 'NUMBER', nullable: true },
+    References: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
-          poNo: { type: 'STRING', nullable: true },
-          docNo: { type: 'STRING', nullable: true },
-          docDate: { type: 'STRING', nullable: true },
-          grnNo: { type: 'STRING', nullable: true },
-          invoiceAmount: { type: 'NUMBER', nullable: true },
-          deduction: { type: 'NUMBER', nullable: true },
-          amount: { type: 'NUMBER', nullable: true },
+          PONo: { type: 'STRING', nullable: true },
+          DocNo: { type: 'STRING', nullable: true },
+          DocDate: { type: 'STRING', nullable: true },
+          GRNNo: { type: 'STRING', nullable: true },
+          InvoiceAmount: { type: 'NUMBER', nullable: true },
+          Deduction: { type: 'NUMBER', nullable: true },
+          Amount: { type: 'NUMBER', nullable: true },
         },
       },
     },
@@ -154,18 +147,22 @@ STEP 1 — SEGMENT the pages into logical documents:
 
 STEP 2 — CLASSIFY each document's docType: TAX_INVOICE, DELIVERY_CHALLAN, EWAY_BILL, PAYMENT_ADVICE, or OTHER.
 
-STEP 3 — EXTRACT into the schema:
+STEP 3 — EXTRACT into the schema (field names are case-sensitive — use them EXACTLY as written):
 For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" and set "paymentAdvice" to null:
-- supplier / supplierGSTNo: the issuing seller and its GSTIN.
-- invoiceNo + invoiceDate, and challanNo + challanDate if a separate challan number/date is printed (else null).
-- poNo: the buyer's purchase / order number — HEADER level, one per document (labels: "PO No", "Order No", "Order No1"). Do NOT repeat it per item.
-- eWayBillNo, vehicleNo, lrNo (L.R. No.), transporter (transporter name) — often on the e-Way Bill / dispatch section.
-- items[]: EVERY line. itemNo (item/code, as string), itemDesc, hsnCode, qty (numeric), unit (UOM such as KG, Rolls, Sheets, Pcs — required when shown; the same line may show both a piece count and a weight, prefer the billed quantity and put its unit), rate (per-unit price), amount (line value), batchNo (lot/batch if present, else null).
-- taxableValue, taxAmount (total GST: CGST+SGST+IGST), invoiceTotal (final payable).
+- Supplier / SupplierGSTNo: the issuing seller and its GSTIN.
+- InvoiceNo + InvoiceDate, and ChallanNo + ChallanDate if a separate challan number/date is printed (else null).
+- VehicleNo, LRNo (L.R. No.), Transporter (transporter name) — often on the e-Way Bill / dispatch section of a merged document.
+- Items[]: EVERY line, with these per-item fields:
+  - PONo: the purchase / order number for that line (labels: "PO No", "Order No", "Order No1"). If a single PO covers the whole document, repeat it on every item.
+  - ItemNo: item / part code (as string).
+  - ItemDesc: the goods description.
+  - Rate: per-unit price (numeric).
+  - Qty: quantity (numeric).
+  - BatchNo: lot / batch number if present, else null.
 
 For PAYMENT_ADVICE fill "paymentAdvice" and set "goods" to null:
-- payer (who is paying / on whose behalf), paymentRef (UTR / instrument no), paymentDate, grandTotal.
-- references[]: each settled invoice row — poNo, docNo, docDate, grnNo, invoiceAmount, deduction (TDS/deduction), amount (net paid).
+- Payer (who is paying / on whose behalf), PaymentRef (UTR / instrument no), PaymentDate, GrandTotal.
+- References[]: each settled invoice row — PONo, DocNo, DocDate, GRNNo, InvoiceAmount, Deduction (TDS/deduction), Amount (net paid).
 
 Rules:
 - Use null for any field genuinely absent or illegible. Do not invent values.
@@ -231,10 +228,10 @@ function normaliseDocument(
 ): ExtractedDocument {
   const docType = (raw.docType ?? 'OTHER') as DocType;
   const goods = raw.goods
-    ? { ...raw.goods, items: raw.goods.items ?? [] }
+    ? { ...raw.goods, Items: raw.goods.Items ?? [] }
     : null;
   const paymentAdvice = raw.paymentAdvice
-    ? { ...raw.paymentAdvice, references: raw.paymentAdvice.references ?? [] }
+    ? { ...raw.paymentAdvice, References: raw.paymentAdvice.References ?? [] }
     : null;
 
   return {
@@ -252,30 +249,23 @@ function normaliseDocument(
 
 function parsedInvoiceToGoodsDoc(p: ParsedInvoice): GoodsDoc {
   return {
-    supplier: p.vendor?.name ?? null,
-    supplierGSTNo: p.vendor?.taxId ?? p.gstNumbers?.[0] ?? null,
-    invoiceNo: p.invoiceNo ?? null,
-    invoiceDate: p.date ?? null,
-    challanNo: null,
-    challanDate: null,
-    poNo: null,
-    eWayBillNo: p.eWayBillNo ?? null,
-    vehicleNo: p.dispatch?.motorVehicleNo ?? null,
-    lrNo: p.dispatch?.lrNumber ?? p.lrNumber ?? null,
-    transporter: p.dispatch?.transport ?? p.transport ?? null,
-    items: (p.items ?? []).map((i) => ({
-      itemNo: i.itemNo != null ? String(i.itemNo) : null,
-      itemDesc: i.description,
-      hsnCode: i.hsnCode ?? null,
-      qty: i.quantity ?? null,
-      unit: i.unit ?? null,
-      rate: i.unitPrice ?? null,
-      amount: i.totalAmount ?? null,
-      batchNo: null,
+    Supplier: p.vendor?.name ?? null,
+    SupplierGSTNo: p.vendor?.taxId ?? p.gstNumbers?.[0] ?? null,
+    ChallanNo: null,
+    ChallanDate: null,
+    InvoiceNo: p.invoiceNo ?? null,
+    InvoiceDate: p.date ?? null,
+    VehicleNo: p.dispatch?.motorVehicleNo ?? null,
+    LRNo: p.dispatch?.lrNumber ?? p.lrNumber ?? null,
+    Transporter: p.dispatch?.transport ?? p.transport ?? null,
+    Items: (p.items ?? []).map((i) => ({
+      PONo: null,
+      ItemNo: i.itemNo != null ? String(i.itemNo) : null,
+      ItemDesc: i.description,
+      Rate: i.unitPrice ?? null,
+      Qty: i.quantity ?? null,
+      BatchNo: null,
     })),
-    taxableValue: p.totals?.subtotal ?? null,
-    taxAmount: p.totals?.taxAmount ?? null,
-    invoiceTotal: p.totals?.grandTotal ?? null,
   };
 }
 

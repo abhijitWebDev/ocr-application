@@ -4,6 +4,9 @@
 // its e-way bill merged, or a batch of separate docs). Every document carries
 // EITHER a `goods` payload OR a `paymentAdvice` payload — discriminated by
 // `docType`. Both fields are nullable so we never depend on Gemini union support.
+//
+// The `goods` / `paymentAdvice` field names use the caller's canonical
+// PascalCase contract verbatim — this is exactly what gets exported / POSTed.
 
 export type DocType =
   | 'TAX_INVOICE'
@@ -19,50 +22,43 @@ export const GOODS_TYPES: DocType[] = [
 ];
 
 export interface GoodsItem {
-  itemNo: string | null;
-  itemDesc: string;
-  hsnCode: string | null;
-  qty: number | null;
-  unit: string | null;
-  rate: number | null;
-  amount: number | null;
-  batchNo: string | null;
+  PONo: string | null;
+  ItemNo: string | null;
+  ItemDesc: string;
+  Rate: number | null;
+  Qty: number | null;
+  BatchNo: string | null;
 }
 
 export interface GoodsDoc {
-  supplier: string | null;
-  supplierGSTNo: string | null;
-  invoiceNo: string | null;
-  invoiceDate: string | null;
-  challanNo: string | null;
-  challanDate: string | null;
-  poNo: string | null; // header-level (one per document)
-  eWayBillNo: string | null;
-  vehicleNo: string | null;
-  lrNo: string | null;
-  transporter: string | null;
-  items: GoodsItem[];
-  taxableValue: number | null;
-  taxAmount: number | null;
-  invoiceTotal: number | null;
+  Supplier: string | null;
+  SupplierGSTNo: string | null;
+  ChallanNo: string | null;
+  ChallanDate: string | null;
+  InvoiceNo: string | null;
+  InvoiceDate: string | null;
+  VehicleNo: string | null;
+  LRNo: string | null;
+  Transporter: string | null;
+  Items: GoodsItem[];
 }
 
-export interface PaymentRef {
-  poNo: string | null;
-  docNo: string | null;
-  docDate: string | null;
-  grnNo: string | null;
-  invoiceAmount: number | null;
-  deduction: number | null;
-  amount: number | null;
+export interface PaymentReference {
+  PONo: string | null;
+  DocNo: string | null;
+  DocDate: string | null;
+  GRNNo: string | null;
+  InvoiceAmount: number | null;
+  Deduction: number | null;
+  Amount: number | null;
 }
 
 export interface PaymentAdviceDoc {
-  payer: string | null;
-  paymentRef: string | null; // UTR / instrument no
-  paymentDate: string | null;
-  grandTotal: number | null;
-  references: PaymentRef[];
+  Payer: string | null;
+  PaymentRef: string | null; // UTR / instrument no
+  PaymentDate: string | null;
+  GrandTotal: number | null;
+  References: PaymentReference[];
 }
 
 export interface ExtractedDocument {
@@ -81,38 +77,53 @@ export interface ExtractionResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Best-effort display title for a document (vendor/payer fallback chain). */
+/** Best-effort display title for a document (supplier/payer fallback chain). */
 export function docTitle(doc: ExtractedDocument): string {
-  if (doc.goods?.supplier) return doc.goods.supplier;
-  if (doc.paymentAdvice?.payer) return doc.paymentAdvice.payer;
+  if (doc.goods?.Supplier) return doc.goods.Supplier;
+  if (doc.paymentAdvice?.Payer) return doc.paymentAdvice.Payer;
   return 'Unknown';
 }
 
-/** Headline monetary value for a document, regardless of type. */
+/**
+ * Headline monetary value for display only (NOT part of the exported JSON).
+ * Goods totals are derived from Rate × Qty since the contract has no amount field.
+ */
 export function docTotal(doc: ExtractedDocument): number | null {
-  if (doc.goods) return doc.goods.invoiceTotal;
-  if (doc.paymentAdvice) return doc.paymentAdvice.grandTotal;
+  if (doc.goods) {
+    const sum = (doc.goods.Items ?? []).reduce(
+      (s, i) => s + (i.Rate ?? 0) * (i.Qty ?? 0),
+      0,
+    );
+    return sum > 0 ? sum : null;
+  }
+  if (doc.paymentAdvice) return doc.paymentAdvice.GrandTotal;
   return null;
+}
+
+/** Per-line display amount (Rate × Qty) — display only, not exported. */
+export function lineAmount(item: GoodsItem): number | null {
+  if (item.Rate != null && item.Qty != null) return item.Rate * item.Qty;
+  return item.Rate ?? null;
 }
 
 /** Primary reference number shown in lists / headers. */
 export function docRef(doc: ExtractedDocument): string | null {
-  if (doc.goods) return doc.goods.invoiceNo ?? doc.goods.challanNo;
-  if (doc.paymentAdvice) return doc.paymentAdvice.paymentRef;
+  if (doc.goods) return doc.goods.InvoiceNo ?? doc.goods.ChallanNo;
+  if (doc.paymentAdvice) return doc.paymentAdvice.PaymentRef;
   return null;
 }
 
 /** Source date string for a document, regardless of type. */
 export function docDate(doc: ExtractedDocument): string | null {
-  if (doc.goods) return doc.goods.invoiceDate ?? doc.goods.challanDate;
-  if (doc.paymentAdvice) return doc.paymentAdvice.paymentDate;
+  if (doc.goods) return doc.goods.InvoiceDate ?? doc.goods.ChallanDate;
+  if (doc.paymentAdvice) return doc.paymentAdvice.PaymentDate;
   return null;
 }
 
 /** Item / reference-row count for compact summaries. */
 export function docLineCount(doc: ExtractedDocument): number {
-  if (doc.goods) return doc.goods.items?.length ?? 0;
-  if (doc.paymentAdvice) return doc.paymentAdvice.references?.length ?? 0;
+  if (doc.goods) return doc.goods.Items?.length ?? 0;
+  if (doc.paymentAdvice) return doc.paymentAdvice.References?.length ?? 0;
   return 0;
 }
 
