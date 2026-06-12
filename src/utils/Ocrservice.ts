@@ -1,20 +1,13 @@
 // utils/Ocrservice.ts
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { parseInvoice, type ParsedInvoice } from './Invoiceparser';
 import {
   type DocType,
   type ExtractedDocument,
   type ExtractionResult,
-  type GoodsDoc,
 } from './Schema';
 
-const VISION_API_KEY = process.env.EXPO_PUBLIC_VISION_KEY || '';
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || VISION_API_KEY;
-
-// ── Google Vision endpoints (fallback) ───────────────────────────────────────
-const IMAGE_ANNOTATE_URL = `https://vision.googleapis.com/v1/images:annotate?key=${VISION_API_KEY}`;
-const FILE_ANNOTATE_URL = `https://vision.googleapis.com/v1/files:annotate?key=${VISION_API_KEY}`;
+const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || '';
 
 // ── Gemini endpoint ───────────────────────────────────────────────────────────
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
@@ -33,16 +26,60 @@ async function uriToBase64(uri: string): Promise<string> {
   });
 }
 
-function isPDF(input: ScanInput): boolean {
-  return (
-    input.mime === 'application/pdf' ||
-    /\.pdf($|\?)/i.test(input.uri) ||
-    input.uri.includes('application%2Fpdf')
-  );
-}
-
 function generateId(): string {
   return `doc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Transient Gemini failures (rate-limit / overloaded / server error) that are
+// worth retrying rather than surfacing to the user.
+const RETRYABLE_STATUS = new Set([429, 500, 503]);
+const MAX_RETRIES = 4;
+
+/**
+ * POST to Gemini, retrying transient 429/500/503 responses (and network
+ * errors) with exponential backoff + jitter. Returns the successful Response;
+ * throws with the API's message once retries are exhausted.
+ */
+async function fetchGeminiWithRetry(body: string): Promise<Response> {
+  let lastMessage = 'Gemini request failed';
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // 1s, 2s, 4s, 8s … capped, with a little jitter to avoid thundering herd.
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 8000);
+      await sleep(delay + Math.random() * 300);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(GEMINI_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+    } catch (e: any) {
+      // Network-level failure (no response) — retry while attempts remain.
+      lastMessage = e?.message || 'Network error';
+      continue;
+    }
+
+    if (response.ok) return response;
+
+    const err = await response.json().catch(() => ({}));
+    lastMessage = err.error?.message || `HTTP ${response.status}`;
+
+    // Non-transient status (e.g. 400 bad request, 403 auth) — fail immediately.
+    if (!RETRYABLE_STATUS.has(response.status)) {
+      throw new Error(`Gemini API error: ${lastMessage}`);
+    }
+    // Transient (429/500/503) — loop and retry.
+  }
+  throw new Error(
+    `Gemini is busy right now (it kept returning errors). Please try again in a moment. (${lastMessage})`,
+  );
 }
 
 // ── Gemini structured-output schema (OpenAPI subset) ──────────────────────────
@@ -135,7 +172,6 @@ const GEMINI_RESPONSE_SCHEMA = {
           },
           goods: GOODS_SCHEMA,
           paymentAdvice: PAYMENT_ADVICE_SCHEMA,
-          rawText: { type: 'STRING' },
         },
         required: ['docType'],
       },
@@ -183,7 +219,6 @@ For PAYMENT_ADVICE fill "paymentAdvice" and set "goods" to null:
 Rules:
 - Use null for any field genuinely absent or illegible. Do not invent values.
 - Numbers must be plain numerics (strip ₹, Rs., commas).
-- rawText: full verbatim transcription of that document's text, page by page (used for verification).
 - Return ALL documents you find in the "documents" array.`;
 
 // ── Gemini extraction (multi-page / multi-document, structured) ───────────────
@@ -198,30 +233,37 @@ async function callGeminiExtraction(
   }
   parts.push({ text: EXTRACTION_PROMPT });
 
-  const response = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const response = await fetchGeminiWithRetry(
+    JSON.stringify({
       contents: [{ parts }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 16384,
+        // Structured fields only (no rawText transcription). Scale modest
+        // headroom with page count; cap at the model's 65536 output limit.
+        maxOutputTokens: Math.min(8192 + inputs.length * 3072, 65536),
         responseMimeType: 'application/json',
         responseSchema: GEMINI_RESPONSE_SCHEMA,
+        // gemini-2.5-flash enables "thinking" by default, which silently eats
+        // into maxOutputTokens and truncates the JSON on multi-page scans.
+        // Disable it — structured extraction doesn't need it.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(
-      `Gemini API error: ${err.error?.message || response.status}`,
-    );
-  }
+  );
 
   const data = await response.json();
+  const candidate = data.candidates?.[0];
+  // If the model ran out of output budget the JSON is truncated → give an
+  // actionable error instead of a generic parse failure.
+  if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+    throw new Error(
+      candidate.finishReason === 'MAX_TOKENS'
+        ? 'Document response was too large to process. Try scanning fewer pages at once.'
+        : `Gemini stopped early (${candidate.finishReason}).`,
+    );
+  }
   // Gemini 2.5+ may return thinking parts (thought: true) — pick the JSON one.
-  const respParts: any[] = data.candidates?.[0]?.content?.parts ?? [];
+  const respParts: any[] = candidate?.content?.parts ?? [];
   const textPart = respParts.find((p) => p.text && !p.thought) ?? respParts[0];
   const raw: string = textPart?.text?.trim() ?? '';
 
@@ -261,151 +303,16 @@ function normaliseDocument(
   };
 }
 
-// ── Legacy fallback (Google Vision raw text → regex parser) ───────────────────
-
-function parsedInvoiceToGoodsDoc(p: ParsedInvoice): GoodsDoc {
-  return {
-    Supplier: p.vendor?.name ?? null,
-    SupplierGSTNo: p.vendor?.taxId ?? p.gstNumbers?.[0] ?? null,
-    ChallanNo: null,
-    ChallanDate: null,
-    InvoiceNo: p.invoiceNo ?? null,
-    InvoiceDate: p.date ?? null,
-    VehicleNo: p.dispatch?.motorVehicleNo ?? null,
-    LRNo: p.dispatch?.lrNumber ?? p.lrNumber ?? null,
-    Transporter: p.dispatch?.transport ?? p.transport ?? null,
-    Items: (p.items ?? []).map((i) => ({
-      PONo: null,
-      ItemNo: i.itemNo != null ? String(i.itemNo) : null,
-      ItemDesc: i.description,
-      Rate: i.unitPrice ?? null,
-      Qty: i.quantity ?? null,
-      BatchNo: null,
-    })),
-    TaxableValue: p.totals?.subtotal ?? null,
-    CGSTRate: p.taxes?.cgst?.rate ?? null,
-    CGSTAmount: p.taxes?.cgst?.amount ?? null,
-    SGSTRate: p.taxes?.sgst?.rate ?? null,
-    SGSTAmount: p.taxes?.sgst?.amount ?? null,
-    IGSTRate: p.taxes?.igst?.rate ?? null,
-    IGSTAmount: p.taxes?.igst?.amount ?? null,
-    TotalTaxAmount: p.totals?.taxAmount ?? null,
-    RoundOff: p.totals?.roundOff ?? null,
-    InvoiceTotal: p.totals?.grandTotal ?? null,
-  };
-}
-
-async function fallbackExtractOne(input: ScanInput): Promise<ExtractedDocument> {
-  const rawText = isPDF(input)
-    ? await performOCRFromPDF(input.uri)
-    : await performOCR(input.uri);
-  const parsed = await parseInvoice(rawText);
-  return {
-    id: generateId(),
-    scannedAt: new Date().toISOString(),
-    docType: 'TAX_INVOICE',
-    imageUris: [input.uri],
-    goods: parsedInvoiceToGoodsDoc(parsed),
-    paymentAdvice: null,
-    rawText,
-  };
-}
-
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Extract structured documents from one or more pages/files in a single pass.
- * Primary path: Gemini structured output (segments + classifies + merges).
- * Fallback: Google Vision raw text + regex parser, one document per input.
+ * Extract structured documents from one or more pages/files in a single pass
+ * via Gemini structured output (segments + classifies + merges).
  */
 export async function performExtraction(
   inputs: ScanInput[],
 ): Promise<ExtractionResult> {
   const imageUris = inputs.map((i) => i.uri);
-  try {
-    const rawDocs = await callGeminiExtraction(inputs);
-    return { documents: rawDocs.map((d) => normaliseDocument(d, imageUris)) };
-  } catch {
-    // Fallback: process each input independently via Vision + regex parser.
-    const documents: ExtractedDocument[] = [];
-    for (const input of inputs) {
-      documents.push(await fallbackExtractOne(input));
-    }
-    return { documents };
-  }
-}
-
-// ── Google Vision raw-text helpers (used by fallback) ─────────────────────────
-
-async function extractTextFromImage(base64Image: string): Promise<string> {
-  const response = await fetch(IMAGE_ANNOTATE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      requests: [
-        {
-          image: { content: base64Image },
-          features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`Vision API error: ${err.error?.message || 'Unknown error'}`);
-  }
-
-  const data = await response.json();
-  const text = data.responses?.[0]?.fullTextAnnotation?.text;
-  if (!text) throw new Error('No text detected in image');
-  return text;
-}
-
-async function extractTextFromPDF(base64PDF: string): Promise<string> {
-  const response = await fetch(FILE_ANNOTATE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      requests: [
-        {
-          inputConfig: { content: base64PDF, mimeType: 'application/pdf' },
-          features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
-          pages: [1, 2, 3, 4, 5],
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`Vision PDF error: ${err.error?.message || 'Unknown error'}`);
-  }
-
-  const data = await response.json();
-  const pageResponses: any[] = data.responses?.[0]?.responses ?? [];
-  if (pageResponses.length === 0) throw new Error('No text detected in PDF');
-
-  const allText = pageResponses
-    .map((r: any, i: number) => {
-      const pageText: string = r.fullTextAnnotation?.text ?? '';
-      return pageText ? `--- Page ${i + 1} ---\n${pageText}` : '';
-    })
-    .filter(Boolean)
-    .join('\n\n');
-
-  if (!allText) throw new Error('No text detected in PDF');
-  return allText;
-}
-
-/** Raw text extraction via Google Vision (image). */
-export async function performOCR(imageUri: string): Promise<string> {
-  const base64 = await uriToBase64(imageUri);
-  return extractTextFromImage(base64);
-}
-
-/** Raw text extraction via Google Vision (PDF). */
-export async function performOCRFromPDF(pdfUri: string): Promise<string> {
-  const base64 = await uriToBase64(pdfUri);
-  return extractTextFromPDF(base64);
+  const rawDocs = await callGeminiExtraction(inputs);
+  return { documents: rawDocs.map((d) => normaliseDocument(d, imageUris)) };
 }
