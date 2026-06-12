@@ -226,6 +226,12 @@ Rules:
 async function callGeminiExtraction(
   inputs: ScanInput[],
 ): Promise<Partial<ExtractedDocument>[]> {
+  if (!GEMINI_API_KEY) {
+    throw new Error(
+      'Gemini API key is missing. Set EXPO_PUBLIC_GEMINI_KEY in .env and restart with `npx expo start -c`.',
+    );
+  }
+
   const parts: any[] = [];
   for (const input of inputs) {
     const data = await uriToBase64(input.uri);
