@@ -89,7 +89,6 @@ async function fetchGeminiWithRetry(body: string): Promise<Response> {
 const GOODS_ITEM_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    PONo: { type: 'STRING', nullable: true },
     ItemNo: { type: 'STRING', nullable: true },
     ItemDesc: { type: 'STRING' },
     Rate: { type: 'NUMBER', nullable: true },
@@ -97,6 +96,17 @@ const GOODS_ITEM_SCHEMA = {
     BatchNo: { type: 'STRING', nullable: true },
   },
   required: ['ItemDesc'],
+} as const;
+
+// One purchase order and every line clubbed under it. Lines sharing a PONo go
+// into the SAME order; lines with no PO share a single PONo:null order.
+const GOODS_ORDER_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    PONo: { type: 'STRING', nullable: true },
+    Items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
+  },
+  required: ['Items'],
 } as const;
 
 const GOODS_SCHEMA = {
@@ -112,7 +122,7 @@ const GOODS_SCHEMA = {
     VehicleNo: { type: 'STRING', nullable: true },
     LRNo: { type: 'STRING', nullable: true },
     Transporter: { type: 'STRING', nullable: true },
-    Items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
+    Orders: { type: 'ARRAY', items: GOODS_ORDER_SCHEMA },
     TaxableValue: { type: 'NUMBER', nullable: true },
     CGSTRate: { type: 'NUMBER', nullable: true },
     CGSTAmount: { type: 'NUMBER', nullable: true },
@@ -198,13 +208,14 @@ For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" an
 - Supplier / SupplierGSTNo: the issuing seller and its GSTIN.
 - InvoiceNo + InvoiceDate, and ChallanNo + ChallanDate if a separate challan number/date is printed (else null).
 - VehicleNo, LRNo (L.R. No.), Transporter (transporter name) — often on the e-Way Bill / dispatch section of a merged document.
-- Items[]: EVERY line, with these per-item fields:
-  - PONo: the purchase / order number for that line (labels: "PO No", "Order No", "Order No1"). If a single PO covers the whole document, repeat it on every item.
-  - ItemNo: item / part code (as string).
-  - ItemDesc: the goods description.
-  - Rate: per-unit price (numeric).
-  - Qty: quantity (numeric).
-  - BatchNo: lot / batch number if present, else null.
+- Orders[]: group EVERY line item by its purchase / order number. Lines that share the SAME PO number belong to ONE order object; do NOT create a separate order per line when the PO repeats. Each order has:
+  - PONo: the purchase / order number for that group (labels: "PO No", "Order No", "Order No1"). If a single PO covers the whole document, return ONE order holding all items. Lines with no PO printed go into a single order with PONo = null.
+  - Items[]: the lines under that PO, each with:
+    - ItemNo: item / part code (as string).
+    - ItemDesc: the goods description.
+    - Rate: per-unit price (numeric).
+    - Qty: quantity (numeric).
+    - BatchNo: lot / batch number if present, else null.
 - Document-level tax summary (from the HSN/SAC tax table or the tax rows near the total — one set per document):
   - TaxableValue: the total taxable value (taxable amount before tax).
   - CGSTRate / CGSTAmount, SGSTRate / SGSTAmount, IGSTRate / IGSTAmount: the % rate and the rupee amount for each tax head. Intra-state invoices have CGST + SGST (leave IGST null); inter-state invoices have IGST only (leave CGST/SGST null). Use null for any head not present.
@@ -292,7 +303,7 @@ function normaliseDocument(
 ): ExtractedDocument {
   const docType = (raw.docType ?? 'OTHER') as DocType;
   const goods = raw.goods
-    ? { ...raw.goods, Items: raw.goods.Items ?? [] }
+    ? { ...raw.goods, Orders: raw.goods.Orders ?? [] }
     : null;
   const paymentAdvice = raw.paymentAdvice
     ? { ...raw.paymentAdvice, References: raw.paymentAdvice.References ?? [] }

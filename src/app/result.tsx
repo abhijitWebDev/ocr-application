@@ -22,6 +22,7 @@ import {
   docRef,
   docTitle,
   docTotal,
+  goodsOrders,
   lineAmount,
   type ExtractedDocument,
   type ExtractionResult,
@@ -56,10 +57,12 @@ function buildShareText(doc: ExtractedDocument): string {
     g?.ChallanNo ? `Challan #: ${g.ChallanNo}` : '',
     g?.InvoiceDate ? `Date: ${g.InvoiceDate}` : '',
     '',
-    ...(g?.Items ?? []).map(
-      (i) =>
-        `• ${i.ItemDesc} (${i.Qty ?? ''}) — ${formatINR(lineAmount(i))}`,
-    ),
+    ...goodsOrders(g).flatMap((o) => [
+      `PO: ${o.PONo || '—'}`,
+      ...o.Items.map(
+        (i) => `  • ${i.ItemDesc} (${i.Qty ?? ''}) — ${formatINR(lineAmount(i))}`,
+      ),
+    ]),
     '',
     `TOTAL: ${formatINR(docTotal(doc))}`,
   ]
@@ -282,6 +285,8 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
   const g = doc.goods;
   if (!g) return null;
   const hasDispatch = !!(g.VehicleNo || g.LRNo || g.Transporter);
+  const orders = goodsOrders(g);
+  const itemCount = orders.reduce((n, o) => n + o.Items.length, 0);
   return (
     <>
       <Section title="DOCUMENT INFO" icon="document-text-outline" color={Colors.accent}>
@@ -306,39 +311,54 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
         </Section>
       )}
 
-      {(g.Items?.length ?? 0) > 0 && (
+      {orders.length > 0 && (
         <Section
-          title={`LINE ITEMS (${g.Items.length})`}
+          title={`LINE ITEMS (${itemCount})`}
           icon="list-outline"
           color={Colors.accent}
         >
-          {g.Items.map((item, idx) => (
-            <View
-              key={idx}
-              style={[styles.lineItem, idx === g.Items.length - 1 && { borderBottomWidth: 0 }]}
-            >
-              <View style={styles.lineItemLeft}>
-                <View style={[styles.lineItemNum, { backgroundColor: typeColor + '22' }]}>
-                  <Text style={[styles.lineItemNumText, { color: typeColor }]}>
-                    {idx + 1}
-                  </Text>
-                </View>
-                <View style={styles.lineItemBody}>
-                  <Text style={styles.lineItemDesc}>{item.ItemDesc}</Text>
-                  <Text style={styles.lineItemMeta}>
-                    {[
-                      item.Qty != null ? `Qty: ${item.Qty}` : null,
-                      item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
-                      item.PONo ? `PO: ${item.PONo}` : null,
-                      item.ItemNo ? `Item: ${item.ItemNo}` : null,
-                      item.BatchNo ? `Batch: ${item.BatchNo}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join('  ')}
-                  </Text>
-                </View>
+          {orders.map((order, oIdx) => (
+            <View key={oIdx} style={oIdx > 0 && styles.orderGroup}>
+              <View style={styles.orderHeader}>
+                <Ionicons name="pricetag-outline" size={13} color={Colors.textSecondary} />
+                <Text style={styles.orderHeaderText}>
+                  PO: {order.PONo || '—'}
+                </Text>
+                <Text style={styles.orderHeaderCount}>
+                  {order.Items.length} {order.Items.length === 1 ? 'item' : 'items'}
+                </Text>
               </View>
-              <Text style={styles.lineItemAmount}>{formatINR(lineAmount(item))}</Text>
+              {order.Items.map((item, idx) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.lineItem,
+                    idx === order.Items.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <View style={styles.lineItemLeft}>
+                    <View style={[styles.lineItemNum, { backgroundColor: typeColor + '22' }]}>
+                      <Text style={[styles.lineItemNumText, { color: typeColor }]}>
+                        {idx + 1}
+                      </Text>
+                    </View>
+                    <View style={styles.lineItemBody}>
+                      <Text style={styles.lineItemDesc}>{item.ItemDesc}</Text>
+                      <Text style={styles.lineItemMeta}>
+                        {[
+                          item.Qty != null ? `Qty: ${item.Qty}` : null,
+                          item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
+                          item.ItemNo ? `Item: ${item.ItemNo}` : null,
+                          item.BatchNo ? `Batch: ${item.BatchNo}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join('  ')}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.lineItemAmount}>{formatINR(lineAmount(item))}</Text>
+                </View>
+              ))}
             </View>
           ))}
         </Section>
@@ -622,6 +642,27 @@ const styles = StyleSheet.create({
   },
   grandTotalLabel: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   grandTotalValue: { fontSize: 22, fontWeight: '800', color: Colors.amber },
+
+  orderGroup: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  orderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 4,
+  },
+  orderHeaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    letterSpacing: 0.3,
+    flex: 1,
+  },
+  orderHeaderCount: { fontSize: 11, color: Colors.textMuted },
 
   lineItem: {
     flexDirection: 'row',
