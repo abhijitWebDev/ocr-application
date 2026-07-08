@@ -95,7 +95,9 @@ const GOODS_ITEM_SCHEMA = {
     Qty: { type: 'NUMBER', nullable: true },
     BatchNo: { type: 'STRING', nullable: true },
   },
-  required: ['ItemDesc'],
+  // All fields REQUIRED so Gemini always emits the keys (as null when absent).
+  // Nullable-but-optional fields are silently dropped from the output.
+  required: ['ItemNo', 'ItemDesc', 'Rate', 'Qty', 'BatchNo'],
 } as const;
 
 // One purchase order and every line clubbed under it. Lines sharing a PONo go
@@ -106,7 +108,10 @@ const GOODS_ORDER_SCHEMA = {
     PONo: { type: 'STRING', nullable: true },
     Items: { type: 'ARRAY', items: GOODS_ITEM_SCHEMA },
   },
-  required: ['Items'],
+  // PONo must be REQUIRED so Gemini always emits the key (as null when the
+  // document has no PO). A nullable-but-optional field is silently dropped
+  // from the output, which is why PONo went missing entirely.
+  required: ['PONo', 'Items'],
 } as const;
 
 const GOODS_SCHEMA = {
@@ -255,9 +260,11 @@ async function callGeminiExtraction(
       contents: [{ parts }],
       generationConfig: {
         temperature: 0,
-        // Structured fields only (no rawText transcription). Scale modest
-        // headroom with page count; cap at the model's 65536 output limit.
-        maxOutputTokens: Math.min(8192 + inputs.length * 3072, 65536),
+        // maxOutputTokens is a CEILING, not a reservation — Gemini only bills
+        // for tokens actually generated, so there's no cost to requesting the
+        // full window. Use the model's max (65536) so dense documents with many
+        // line items don't truncate mid-JSON and trip the MAX_TOKENS error.
+        maxOutputTokens: 65536,
         responseMimeType: 'application/json',
         responseSchema: GEMINI_RESPONSE_SCHEMA,
         // gemini-2.5-flash enables "thinking" by default, which silently eats
