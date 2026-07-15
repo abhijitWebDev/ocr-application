@@ -118,7 +118,9 @@ export default function ResultScreen() {
   };
 
   const handleSave = async () => {
-    const { saveUrl, username } = await getSettings();
+    const settings = await getSettings();
+    const saveUrl = settings.saveUrl?.trim();
+    const username = settings.username;
     if (!saveUrl) {
       Alert.alert('No Save URL', 'Go to Settings and enter a save URL first.', [
         { text: 'Cancel', style: 'cancel' },
@@ -126,20 +128,46 @@ export default function ResultScreen() {
       ]);
       return;
     }
+    // Normalise the saved URL to the ASMX HTTP-POST endpoint (method name in the
+    // path). Otherwise the request hits the SOAP handler, which rejects the
+    // form-urlencoded body with "Data at the root level is invalid":
+    //   ".../WebService.asmx?op=GET_OCR_Data" -> ".../WebService.asmx/GET_OCR_Data" (help-page URL)
+    //   ".../WebService.asmx"                 -> ".../WebService.asmx/GET_OCR_Data" (base URL)
+    let postUrl = saveUrl.replace(/\/+$/, '');
+    const opMatch = postUrl.match(/^(.*\.asmx)\?op=(\w+)/i);
+    if (opMatch) {
+      postUrl = `${opMatch[1]}/${opMatch[2]}`;
+    } else if (/\.asmx$/i.test(postUrl)) {
+      postUrl = `${postUrl}/GET_OCR_Data`;
+    }
     setIsSaving(true);
     try {
-      const response = await fetch(saveUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documents: docs.map(cleanExport),
-          username,
-        }),
-      });
-      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+      // POST one document per request as x-www-form-urlencoded, matching the
+      // ASMX endpoint (GET_OCR_Data): JsonData + username + DocType. The service
+      // replies with XML (<string>…</string>), so we only check the HTTP status.
+      let sent = 0;
+      for (const d of docs) {
+        const body =
+          `JsonData=${encodeURIComponent(JSON.stringify(cleanExport(d)))}` +
+          `&username=${encodeURIComponent(username ?? '')}` +
+          `&DocType=${encodeURIComponent(d.docType)}`;
+        const response = await fetch(postUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        if (!response.ok) {
+          const serverText = await response.text().catch(() => '');
+          throw new Error(
+            `Document ${sent + 1} of ${docs.length} failed (${response.status}).` +
+              (serverText ? `\n\n${serverText.slice(0, 300)}` : ''),
+          );
+        }
+        sent += 1;
+      }
       Alert.alert(
         'Saved',
-        `${docs.length} document${docs.length > 1 ? 's' : ''} sent to the server.`,
+        `${sent} document${sent > 1 ? 's' : ''} sent to the server.`,
       );
     } catch (err: any) {
       Alert.alert('Save Failed', err.message || 'Could not reach the server.');

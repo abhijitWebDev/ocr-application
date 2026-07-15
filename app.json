@@ -26,6 +26,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
+      "usesCleartextTraffic": true,
       "package": "com.abhijitdev.ocrsample",
       "versionCode": 1,
       "permissions": [

@@ -89,8 +89,11 @@ export default function SettingsScreen() {
               keyboardType="url"
             />
             <Text style={styles.fieldHint}>
-              The invoice JSON will be POST-ed to this URL as{' '}
-              <Text style={styles.mono}>application/json</Text>.
+              Each document is POST-ed here as{' '}
+              <Text style={styles.mono}>application/x-www-form-urlencoded</Text>{' '}
+              (JsonData, username, DocType). For the ASMX service, use the{' '}
+              <Text style={styles.mono}>.asmx</Text> URL — the method path is added
+              automatically.
             </Text>
 
             <Text style={[styles.fieldLabel, { marginTop: 16 }]}>Username</Text>
