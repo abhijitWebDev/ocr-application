@@ -26,14 +26,26 @@ import {
   lineAmount,
   type ExtractedDocument,
   type ExtractionResult,
+  type GoodsDoc,
+  type GoodsItem,
 } from '../utils/Schema';
 import { clearPendingResult, getPendingResult, getSettings } from '../utils/Storage';
 import { Colors, invoiceTypeColors, invoiceTypeLabels } from '../utils/Theme';
 
 function cleanExport(doc: ExtractedDocument): object {
-  return doc.docType === 'PAYMENT_ADVICE'
-    ? (doc.paymentAdvice ?? {})
-    : (doc.goods ?? {});
+  if (doc.docType === 'PAYMENT_ADVICE') return doc.paymentAdvice ?? {};
+  const g = doc.goods;
+  if (!g) return {};
+  const orders = goodsOrders(g);
+  const distinctPOs = new Set(orders.map((o) => o.PONo).filter((p): p is string => !!p));
+  // Single PO (or none) covers the document: drop the Orders[] wrapper and emit a
+  // flat Items[] with the PO stamped on every line. Only keep the grouped
+  // Orders[] shape when the document actually spans multiple distinct POs.
+  if (distinctPOs.size <= 1) {
+    const { Orders, ...rest } = g as GoodsDoc & { Orders?: unknown };
+    return { ...rest, Items: orders.flatMap((o) => o.Items) };
+  }
+  return g;
 }
 
 function buildShareText(doc: ExtractedDocument): string {
@@ -281,12 +293,53 @@ export default function ResultScreen() {
 
 // ── Renderers by docType ───────────────────────────────────────────────────────
 
+// One goods line item. `showPO` controls whether the item's PONo is included in
+// the meta row — true for the flat single-PO list, false when an order-group
+// header already displays the PO.
+function renderLineItem(
+  item: GoodsItem,
+  idx: number,
+  isLast: boolean,
+  showPO: boolean,
+  typeColor: string,
+) {
+  return (
+    <View key={idx} style={[styles.lineItem, isLast && { borderBottomWidth: 0 }]}>
+      <View style={styles.lineItemLeft}>
+        <View style={[styles.lineItemNum, { backgroundColor: typeColor + '22' }]}>
+          <Text style={[styles.lineItemNumText, { color: typeColor }]}>{idx + 1}</Text>
+        </View>
+        <View style={styles.lineItemBody}>
+          <Text style={styles.lineItemDesc}>{item.ItemDesc}</Text>
+          <Text style={styles.lineItemMeta}>
+            {[
+              showPO && item.PONo ? `PO: ${item.PONo}` : null,
+              item.Qty != null ? `Qty: ${item.Qty}` : null,
+              item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
+              item.ItemNo ? `Item: ${item.ItemNo}` : null,
+              item.BatchNo ? `Batch: ${item.BatchNo}` : null,
+            ]
+              .filter(Boolean)
+              .join('  ')}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.lineItemAmount}>{formatINR(lineAmount(item))}</Text>
+    </View>
+  );
+}
+
 function renderGoods(doc: ExtractedDocument, typeColor: string) {
   const g = doc.goods;
   if (!g) return null;
   const hasDispatch = !!(g.VehicleNo || g.LRNo || g.Transporter);
   const orders = goodsOrders(g);
   const itemCount = orders.reduce((n, o) => n + o.Items.length, 0);
+  // Distinct non-null PO numbers across the document. When a single PO (or none)
+  // covers every line, show a flat list with the PO on each line item instead of
+  // an order-group header; only split into groups when the POs actually differ.
+  const distinctPOs = new Set(orders.map((o) => o.PONo).filter((p): p is string => !!p));
+  const singlePO = distinctPOs.size <= 1;
   return (
     <>
       <Section title="DOCUMENT INFO" icon="document-text-outline" color={Colors.accent}>
@@ -317,50 +370,30 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
           icon="list-outline"
           color={Colors.accent}
         >
-          {orders.map((order, oIdx) => (
-            <View key={oIdx} style={oIdx > 0 && styles.orderGroup}>
-              <View style={styles.orderHeader}>
-                <Ionicons name="pricetag-outline" size={13} color={Colors.textSecondary} />
-                <Text style={styles.orderHeaderText}>
-                  PO: {order.PONo || '—'}
-                </Text>
-                <Text style={styles.orderHeaderCount}>
-                  {order.Items.length} {order.Items.length === 1 ? 'item' : 'items'}
-                </Text>
-              </View>
-              {order.Items.map((item, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.lineItem,
-                    idx === order.Items.length - 1 && { borderBottomWidth: 0 },
-                  ]}
-                >
-                  <View style={styles.lineItemLeft}>
-                    <View style={[styles.lineItemNum, { backgroundColor: typeColor + '22' }]}>
-                      <Text style={[styles.lineItemNumText, { color: typeColor }]}>
-                        {idx + 1}
-                      </Text>
-                    </View>
-                    <View style={styles.lineItemBody}>
-                      <Text style={styles.lineItemDesc}>{item.ItemDesc}</Text>
-                      <Text style={styles.lineItemMeta}>
-                        {[
-                          item.Qty != null ? `Qty: ${item.Qty}` : null,
-                          item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
-                          item.ItemNo ? `Item: ${item.ItemNo}` : null,
-                          item.BatchNo ? `Batch: ${item.BatchNo}` : null,
-                        ]
-                          .filter(Boolean)
-                          .join('  ')}
-                      </Text>
-                    </View>
+          {singlePO
+            ? // Single PO (or none) — flat list with the PO shown on each line item.
+              orders
+                .flatMap((o) => o.Items)
+                .map((item, idx, arr) =>
+                  renderLineItem(item, idx, idx === arr.length - 1, true, typeColor),
+                )
+            : // Multiple distinct POs — group by order; header carries the PO.
+              orders.map((order, oIdx) => (
+                <View key={oIdx} style={oIdx > 0 && styles.orderGroup}>
+                  <View style={styles.orderHeader}>
+                    <Ionicons name="pricetag-outline" size={13} color={Colors.textSecondary} />
+                    <Text style={styles.orderHeaderText}>
+                      PO: {order.PONo || '—'}
+                    </Text>
+                    <Text style={styles.orderHeaderCount}>
+                      {order.Items.length} {order.Items.length === 1 ? 'item' : 'items'}
+                    </Text>
                   </View>
-                  <Text style={styles.lineItemAmount}>{formatINR(lineAmount(item))}</Text>
+                  {order.Items.map((item, idx) =>
+                    renderLineItem(item, idx, idx === order.Items.length - 1, false, typeColor),
+                  )}
                 </View>
               ))}
-            </View>
-          ))}
         </Section>
       )}
 

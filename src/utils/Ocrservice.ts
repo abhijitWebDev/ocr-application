@@ -214,7 +214,7 @@ For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" an
 - InvoiceNo + InvoiceDate, and ChallanNo + ChallanDate if a separate challan number/date is printed (else null).
 - VehicleNo, LRNo (L.R. No.), Transporter (transporter name) — often on the e-Way Bill / dispatch section of a merged document.
 - Orders[]: group EVERY line item by its purchase / order number. Lines that share the SAME PO number belong to ONE order object; do NOT create a separate order per line when the PO repeats. Each order has:
-  - PONo: the purchase / order number for that group (labels: "PO No", "Order No", "Order No1"). If a single PO covers the whole document, return ONE order holding all items. Lines with no PO printed go into a single order with PONo = null.
+  - PONo: the purchase / order number for that group (labels: "PO No", "PO. No.", "Order No", "Order No1", "Buyer's Order No.", "Buyer Order No."). If a single PO covers the whole document, return ONE order holding all items. Lines with no PO printed go into a single order with PONo = null.
   - Items[]: the lines under that PO, each with:
     - ItemNo: item / part code (as string).
     - ItemDesc: the goods description.
@@ -310,7 +310,18 @@ function normaliseDocument(
 ): ExtractedDocument {
   const docType = (raw.docType ?? 'OTHER') as DocType;
   const goods = raw.goods
-    ? { ...raw.goods, Orders: raw.goods.Orders ?? [] }
+    ? {
+        ...raw.goods,
+        // Stamp each line with its parent order's PONo so every item carries the
+        // PO (derived — always equals the order's PONo).
+        Orders: (raw.goods.Orders ?? []).map((o: any) => ({
+          ...o,
+          Items: (o?.Items ?? []).map((it: any) => ({
+            ...it,
+            PONo: o?.PONo ?? null,
+          })),
+        })),
+      }
     : null;
   const paymentAdvice = raw.paymentAdvice
     ? { ...raw.paymentAdvice, References: raw.paymentAdvice.References ?? [] }
