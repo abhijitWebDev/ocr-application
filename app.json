@@ -15,7 +15,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Used to scan invoices and receipts",
         "NSPhotoLibraryUsageDescription": "Used to select invoice images from your photo library",
-        "NSPhotoLibraryAddUsageDescription": "Used to save scanned invoice images"
+        "NSPhotoLibraryAddUsageDescription": "Used to save scanned invoice images",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -31,7 +32,8 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {

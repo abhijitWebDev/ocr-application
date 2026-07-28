@@ -127,6 +127,8 @@ const GOODS_SCHEMA = {
     VehicleNo: { type: 'STRING', nullable: true },
     LRNo: { type: 'STRING', nullable: true },
     Transporter: { type: 'STRING', nullable: true },
+    EWayBillNo: { type: 'STRING', nullable: true },
+    EWayBillDate: { type: 'STRING', nullable: true },
     Orders: { type: 'ARRAY', items: GOODS_ORDER_SCHEMA },
     TaxableValue: { type: 'NUMBER', nullable: true },
     CGSTRate: { type: 'NUMBER', nullable: true },
@@ -203,7 +205,7 @@ You are given ONE OR MORE pages (images and/or PDF pages). They may belong to a 
 
 STEP 1 — SEGMENT the pages into logical documents:
 - A table that continues across pages (e.g. a payment advice whose line table spills onto the next page, with totals only on the last page) is ONE document — combine all its pages.
-- A tax invoice followed by its e-Way Bill / delivery challan for the SAME transaction is ONE document — MERGE them: take line items and amounts from the invoice, and fill vehicleNo / lrNo / transporter / eWayBillNo from the e-Way Bill or challan page.
+- A tax invoice followed by its e-Way Bill / delivery challan for the SAME transaction is ONE document — MERGE them: take line items and amounts from the invoice, and fill VehicleNo / LRNo / Transporter / EWayBillNo / EWayBillDate from the e-Way Bill or challan page.
 - Unrelated documents (different suppliers, different transactions) are SEPARATE documents.
 
 STEP 2 — CLASSIFY each document's docType: TAX_INVOICE, DELIVERY_CHALLAN, EWAY_BILL, PAYMENT_ADVICE, or OTHER.
@@ -212,7 +214,8 @@ STEP 3 — EXTRACT into the schema (field names are case-sensitive — use them 
 For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" and set "paymentAdvice" to null:
 - Supplier / SupplierGSTNo: the issuing seller and its GSTIN.
 - InvoiceNo + InvoiceDate, and ChallanNo + ChallanDate if a separate challan number/date is printed (else null).
-- VehicleNo, LRNo (L.R. No.), Transporter (transporter name) — often on the e-Way Bill / dispatch section of a merged document.
+- VehicleNo, LRNo (L.R. No.), Transporter (transporter / transport company name) — often on the e-Way Bill / dispatch section of a merged document. Always fill Transporter when any carrier / transport name is printed.
+- EWayBillNo (E-Way Bill number, usually a 12-digit number; labels: "e-Way Bill No", "EWB No", "eWay Bill No") and EWayBillDate (its date) — from the e-Way Bill page/section. Use null if not present.
 - Orders[]: group EVERY line item by its purchase / order number. Lines that share the SAME PO number belong to ONE order object; do NOT create a separate order per line when the PO repeats. Each order has:
   - PONo: the purchase / order number for that group (labels: "PO No", "PO. No.", "Order No", "Order No1", "Buyer's Order No.", "Buyer Order No."). If a single PO covers the whole document, return ONE order holding all items. Lines with no PO printed go into a single order with PONo = null.
   - Items[]: the lines under that PO, each with:

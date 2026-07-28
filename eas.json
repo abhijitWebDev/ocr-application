@@ -19,6 +19,12 @@
         "simulator": false
       }
     },
+    "preview-testflight": {
+      "distribution": "store",
+      "ios": {
+        "simulator": false
+      }
+    },
     "production": {
       "android": {
         "buildType": "app-bundle"

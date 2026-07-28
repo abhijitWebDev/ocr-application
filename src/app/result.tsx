@@ -68,6 +68,9 @@ function buildShareText(doc: ExtractedDocument): string {
     g?.InvoiceNo ? `Invoice #: ${g.InvoiceNo}` : '',
     g?.ChallanNo ? `Challan #: ${g.ChallanNo}` : '',
     g?.InvoiceDate ? `Date: ${g.InvoiceDate}` : '',
+    g?.Transporter ? `Transporter: ${g.Transporter}` : '',
+    g?.EWayBillNo ? `EWay Bill #: ${g.EWayBillNo}` : '',
+    g?.EWayBillDate ? `EWay Bill Date: ${g.EWayBillDate}` : '',
     '',
     ...goodsOrders(g).flatMap((o) => [
       `PO: ${o.PONo || '—'}`,
@@ -360,7 +363,13 @@ function renderLineItem(
 function renderGoods(doc: ExtractedDocument, typeColor: string) {
   const g = doc.goods;
   if (!g) return null;
-  const hasDispatch = !!(g.VehicleNo || g.LRNo || g.Transporter);
+  const hasDispatch = !!(
+    g.VehicleNo ||
+    g.LRNo ||
+    g.Transporter ||
+    g.EWayBillNo ||
+    g.EWayBillDate
+  );
   const orders = goodsOrders(g);
   const itemCount = orders.reduce((n, o) => n + o.Items.length, 0);
   // Distinct non-null PO numbers across the document. When a single PO (or none)
@@ -389,6 +398,8 @@ function renderGoods(doc: ExtractedDocument, typeColor: string) {
           <InfoRow label="Vehicle No" value={g.VehicleNo} mono />
           <InfoRow label="LR No" value={g.LRNo} mono />
           <InfoRow label="Transporter" value={g.Transporter} />
+          <InfoRow label="EWay Bill No" value={g.EWayBillNo} mono />
+          <InfoRow label="EWay Bill Date" value={g.EWayBillDate} />
         </Section>
       )}
 
