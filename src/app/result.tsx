@@ -23,6 +23,7 @@ import {
   docTitle,
   docTotal,
   goodsOrders,
+  stripLineAids,
   lineAmount,
   type ExtractedDocument,
   type ExtractionResult,
@@ -43,9 +44,14 @@ function cleanExport(doc: ExtractedDocument): object {
   // Orders[] shape when the document actually spans multiple distinct POs.
   if (distinctPOs.size <= 1) {
     const { Orders, ...rest } = g as GoodsDoc & { Orders?: unknown };
-    return { ...rest, Items: orders.flatMap((o) => o.Items) };
+    return { ...rest, Items: orders.flatMap((o) => o.Items.map(stripLineAids)) };
   }
-  return g;
+  // Grouped shape: strip the internal reconciliation aids off every line so the
+  // exported payload stays exactly the caller's PascalCase contract.
+  return {
+    ...g,
+    Orders: orders.map((o) => ({ ...o, Items: o.Items.map(stripLineAids) })),
+  };
 }
 
 function buildShareText(doc: ExtractedDocument): string {
@@ -75,7 +81,9 @@ function buildShareText(doc: ExtractedDocument): string {
     ...goodsOrders(g).flatMap((o) => [
       `PO: ${o.PONo || '—'}`,
       ...o.Items.map(
-        (i) => `  • ${i.ItemDesc} (${i.Qty ?? ''}) — ${formatINR(lineAmount(i))}`,
+        (i) =>
+          `  • ${i.ItemDesc} (${i.Qty ?? ''}` +
+          `${i.Weight != null ? `, ${i.Weight} kg` : ''}) — ${formatINR(lineAmount(i))}`,
       ),
     ]),
     '',
@@ -346,6 +354,7 @@ function renderLineItem(
             {[
               showPO && item.PONo ? `PO: ${item.PONo}` : null,
               item.Qty != null ? `Qty: ${item.Qty}` : null,
+              item.Weight != null ? `Wt: ${item.Weight}` : null,
               item.Rate != null ? `@ ${formatINR(item.Rate)}` : null,
               item.ItemNo ? `Item: ${item.ItemNo}` : null,
               item.BatchNo ? `Batch: ${item.BatchNo}` : null,

@@ -10,7 +10,7 @@ import {
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || '';
 
 // ── Gemini endpoint ───────────────────────────────────────────────────────────
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ── Input type ─────────────────────────────────────────────────────────────────
 export interface ScanInput {
@@ -93,11 +93,39 @@ const GOODS_ITEM_SCHEMA = {
     ItemDesc: { type: 'STRING' },
     Rate: { type: 'NUMBER', nullable: true },
     Qty: { type: 'NUMBER', nullable: true },
+    Weight: { type: 'NUMBER', nullable: true },
     BatchNo: { type: 'STRING', nullable: true },
+    // Reconciliation aids — pure transcription, stripped before export. They
+    // let `reconcileLineItems` REPAIR Rate/Qty in code rather than asking the
+    // model to reason its way to the right column (which is what corrupted
+    // ItemNo previously).
+    UOM: { type: 'STRING', nullable: true },
+    LineAmount: { type: 'NUMBER', nullable: true },
+    RowCells: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          Header: { type: 'STRING', nullable: true },
+          Value: { type: 'NUMBER', nullable: true },
+        },
+        required: ['Header', 'Value'],
+      },
+    },
   },
   // All fields REQUIRED so Gemini always emits the keys (as null when absent).
   // Nullable-but-optional fields are silently dropped from the output.
-  required: ['ItemNo', 'ItemDesc', 'Rate', 'Qty', 'BatchNo'],
+  required: [
+    'ItemNo',
+    'ItemDesc',
+    'Rate',
+    'Qty',
+    'Weight',
+    'BatchNo',
+    'UOM',
+    'LineAmount',
+    'RowCells',
+  ],
 } as const;
 
 // One purchase order and every line clubbed under it. Lines sharing a PONo go
@@ -222,8 +250,12 @@ For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" an
     - ItemNo: item / part code (as string).
     - ItemDesc: the goods description.
     - Rate: per-unit price (numeric).
-    - Qty: quantity (numeric).
+    - Qty: quantity (numeric) — the COUNT of physical units shipped (the "No Of Bundle" / "Qty Of Sheets" / "Qty" / "Pcs" column). Take the count column that is non-zero for this line. This is the piece count, NOT the weight, even when the line is billed PER KG.
+    - Weight: the line's weight if the table prints a weight column ("Weight", "Wt", "Kgs"), else null. Report it as printed; it is a separate figure from Qty.
     - BatchNo: lot / batch number if present, else null.
+    - UOM: the line's unit of measure EXACTLY as printed ("PER KG", "KG", "PCS", "NOS", "MT"), else null.
+    - LineAmount: the money figure printed on that line in its own amount column ("Amount" / "Value" / "Taxable Value"), else null.
+    - RowCells: TRANSCRIBE every numeric cell of that line as {Header, Value} pairs — Header is that column's heading text copied EXACTLY as printed ("Rate", "Weight", "No Of Bundle", "Qty Of Sheets", "Amount"), Value is the number in that column on this line. Include the amount column itself. Copy both verbatim: do not rename a header, do not judge which column means what, do not omit or merge any numeric column. Item codes and batch numbers are excluded; every other number on the row is included. This is transcription, NOT interpretation.
 - Document-level tax summary (from the HSN/SAC tax table or the tax rows near the total — one set per document):
   - TaxableValue: the total taxable value (taxable amount before tax).
   - CGSTRate / CGSTAmount, SGSTRate / SGSTAmount, IGSTRate / IGSTAmount: the % rate and the rupee amount for each tax head. Intra-state invoices have CGST + SGST (leave IGST null); inter-state invoices have IGST only (leave CGST/SGST null). Use null for any head not present.
@@ -306,6 +338,180 @@ async function callGeminiExtraction(
   return docs;
 }
 
+// ── Line-item reconciliation ──────────────────────────────────────────────────
+// Indian line tables carry several numeric columns ("No Of Bundle", "Qty Of
+// Sheets", "Weight", "Rate", "Amount"). Gemini routinely picks the wrong one as
+// Qty — and this is NOT a scan-quality problem: it misreads crisp text PDFs just
+// as often (verified 2026-08-31 across degraded JPEG, crisp JPEG and text PDF).
+//
+// Two traps make this harder than it looks:
+//  1. Multiplication is commutative, so checking Rate x Qty against the printed
+//     amount can never detect a SWAP — 724 x 96 and 96 x 724 both give 69504.
+//  2. Column ORDER is not reliable either. Some layouts print
+//     "Weight | Rate | Amount", others "Rate | Weight | Amount", so "the column
+//     before the amount is the Rate" silently inverts Rate and Qty.
+//
+// So we key off the COLUMN HEADER the model transcribes alongside each number,
+// which is layout-independent, and use arithmetic only to confirm.
+
+const TOLERANCE_REL = 0.01; // 1% — absorbs rounding and small line discounts
+const TOLERANCE_ABS = 1; // rupee floor for tiny lines
+
+const RATE_HEADER = /\b(rate|price|unit\s*price|per\s*unit)\b/i;
+const AMOUNT_HEADER = /\b(amount|value|taxable|total)\b/i;
+const WEIGHT_HEADER = /\b(weight|wt|kgs?|mts?|tons?|qty\s*in\s*kg)\b/i;
+// Countable columns: how many physical units shipped. "No Of Bundle" and
+// "Qty Of Sheets" both live here — an invoice often prints several, with the
+// ones that do not apply to the line left at 0.
+const COUNT_HEADER =
+  /\b(qty|quantity|pcs|nos|sheets?|pieces?|units?|bundles?|cases?|cartons?|packets?|bags?|rolls?|boxes|box)\b/i;
+
+interface RowCell {
+  header: string;
+  value: number;
+}
+
+function closeTo(value: number, target: number): boolean {
+  return (
+    Math.abs(value - target) <=
+    Math.max(TOLERANCE_ABS, Math.abs(target) * TOLERANCE_REL)
+  );
+}
+
+/** Normalise the model's transcribed cells, dropping anything unusable. */
+function rowCells(input: unknown): RowCell[] {
+  if (!Array.isArray(input)) return [];
+  const out: RowCell[] = [];
+  for (const c of input) {
+    const value = typeof c?.Value === 'number' ? c.Value : Number(c?.Value);
+    if (!Number.isFinite(value)) continue;
+    out.push({ header: typeof c?.Header === 'string' ? c.Header : '', value });
+  }
+  return out;
+}
+
+/** First cell whose header matches `re` and which is not the amount column. */
+function findCell(cells: RowCell[], re: RegExp): RowCell | null {
+  return (
+    cells.find((c) => re.test(c.header) && !AMOUNT_HEADER.test(c.header)) ??
+    null
+  );
+}
+
+/**
+ * Repair one line's Rate/Qty against the amount printed on that same line.
+ *
+ * Strategy, strongest signal first:
+ *   1. Column headers — "Rate" is Rate; the quantity column is chosen by UOM
+ *      (weight UOM -> the weight column, piece UOM -> the count column).
+ *      Confirmed by arithmetic against the printed amount.
+ *   2. Arithmetic pair search, with the header naming which of the pair is Rate.
+ *   3. Derive whichever single value is missing from the printed amount.
+ *
+ * Returns the item UNCHANGED whenever the evidence is insufficient — this is a
+ * corrective pass, never a creative one.
+ */
+function reconcileItem(item: any): any {
+  const amount = typeof item?.LineAmount === 'number' ? item.LineAmount : null;
+  const rate = typeof item?.Rate === 'number' ? item.Rate : null;
+  const qty = typeof item?.Qty === 'number' ? item.Qty : null;
+  const cells = rowCells(item?.RowCells);
+  const uom = typeof item?.UOM === 'string' ? item.UOM : '';
+
+  // The weight column, when the table prints one, is reported alongside Qty
+  // rather than replacing it — Qty is a piece count, Weight is kilograms.
+  const printedWeight = findCell(cells, WEIGHT_HEADER)?.value ?? null;
+  const weight = typeof item?.Weight === 'number' ? item.Weight : printedWeight;
+
+  const apply = (nextRate: number, nextQty: number, why: string) => {
+    if (nextRate !== rate || nextQty !== qty) {
+      console.log(
+        `[OCR] line reconciled (${why}) "${item?.ItemDesc ?? ''}": ` +
+          `Rate ${rate} -> ${nextRate}, Qty ${qty} -> ${nextQty}` +
+          (weight != null ? `, Weight ${weight}` : ''),
+      );
+    }
+    return { ...item, Rate: nextRate, Qty: nextQty, Weight: weight };
+  };
+
+  // ── 1. Header-driven (layout-independent, the reliable path) ───────────────
+  // Qty is the COUNT of physical units shipped ("No Of Bundle" / "Qty Of
+  // Sheets"), NOT the weight — even when the line is billed PER KG. Invoices
+  // print several count columns and zero the ones that do not apply, so take
+  // the first non-zero one in printed order.
+  const rateCell = findCell(cells, RATE_HEADER);
+  const weightCell = findCell(cells, WEIGHT_HEADER);
+  const countCell =
+    cells.find(
+      (c) =>
+        COUNT_HEADER.test(c.header) &&
+        !WEIGHT_HEADER.test(c.header) &&
+        !AMOUNT_HEADER.test(c.header) &&
+        c.value !== 0,
+    ) ?? null;
+
+  // Only when the document prints no count column at all does the weight become
+  // the quantity — that is the billed quantity by default on a per-kg line.
+  const qtyCell = countCell ?? weightCell;
+
+  if (rateCell && qtyCell && rateCell !== qtyCell) {
+    // Verify the RATE against the printed amount using the weight (that is what
+    // a PER KG rate multiplies). This still catches a misread Rate even though
+    // Rate x Qty deliberately no longer reconciles on bundle-counted lines.
+    if (amount != null && Math.abs(amount) >= 0.005) {
+      const basis = weightCell && countCell ? weightCell.value : qtyCell.value;
+      if (basis !== 0 && !closeTo(rateCell.value * basis, amount)) {
+        console.log(
+          `[OCR] rate check FAILED "${item?.ItemDesc ?? ''}": ` +
+            `${rateCell.value} x ${basis} != ${amount}`,
+        );
+      }
+    }
+    return apply(rateCell.value, qtyCell.value, 'headers');
+  }
+
+  // Everything below needs a printed amount to verify against. A zero amount is
+  // matched trivially by any pair, so it proves nothing.
+  if (amount == null || Math.abs(amount) < 0.005)
+    return { ...item, Weight: weight };
+
+  // ── 2. Arithmetic pair search; header decides which one is the Rate ────────
+  const factors = cells.filter((c) => !AMOUNT_HEADER.test(c.header));
+  for (let i = 0; i < factors.length; i++) {
+    for (let j = i + 1; j < factors.length; j++) {
+      const a = factors[i];
+      const b = factors[j];
+      if (a.value === 0 || b.value === 0) continue; // placeholder column
+      if (!closeTo(a.value * b.value, amount)) continue;
+
+      const aIsRate = RATE_HEADER.test(a.header);
+      const bIsRate = RATE_HEADER.test(b.header);
+      if (aIsRate && !bIsRate) return apply(a.value, b.value, 'pair+header');
+      if (bIsRate && !aIsRate) return apply(b.value, a.value, 'pair+header');
+
+      // No header hint: fall back to printed order — in most Indian layouts the
+      // Rate sits nearer the amount column than the quantity does.
+      return apply(b.value, a.value, 'pair+position');
+    }
+  }
+
+  // ── 3. Derive a single missing value from the printed amount ──────────────
+  if (rate != null && qty == null && Math.abs(rate) > 0.005) {
+    return apply(rate, amount / rate, 'derived Qty');
+  }
+  if (qty != null && rate == null && Math.abs(qty) > 0.005) {
+    return apply(amount / qty, qty, 'derived Rate');
+  }
+
+  if (rate != null && qty != null && !closeTo(rate * qty, amount)) {
+    console.log(
+      `[OCR] line NOT reconciled "${item?.ItemDesc ?? ''}": ` +
+        `${rate} x ${qty} = ${rate * qty}, printed amount ${amount}`,
+    );
+  }
+  return { ...item, Weight: weight };
+}
+
 /** Normalise a raw Gemini document object into a complete ExtractedDocument. */
 function normaliseDocument(
   raw: Partial<ExtractedDocument>,
@@ -320,7 +526,7 @@ function normaliseDocument(
         Orders: (raw.goods.Orders ?? []).map((o: any) => ({
           ...o,
           Items: (o?.Items ?? []).map((it: any) => ({
-            ...it,
+            ...reconcileItem(it),
             PONo: o?.PONo ?? null,
           })),
         })),
