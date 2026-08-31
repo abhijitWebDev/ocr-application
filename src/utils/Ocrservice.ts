@@ -141,6 +141,19 @@ const GOODS_SCHEMA = {
     RoundOff: { type: 'NUMBER', nullable: true },
     InvoiceTotal: { type: 'NUMBER', nullable: true },
   },
+  // Same reason as GOODS_ITEM_SCHEMA / GOODS_ORDER_SCHEMA: a nullable-but-
+  // optional field is silently DROPPED from Gemini's output rather than emitted
+  // as null. Without this list a low-quality scan can return a goods object
+  // missing e.g. IGSTRate entirely, which reaches the app as `undefined`
+  // (violating the `number | null` contract) and is omitted by JSON.stringify
+  // on export. Listing every key forces them all to be present.
+  required: [
+    'Supplier', 'SupplierGSTNo', 'ChallanNo', 'ChallanDate', 'InvoiceNo',
+    'InvoiceDate', 'VehicleNo', 'LRNo', 'Transporter', 'EWayBillNo',
+    'EWayBillDate', 'Orders', 'TaxableValue', 'CGSTRate', 'CGSTAmount',
+    'SGSTRate', 'SGSTAmount', 'IGSTRate', 'IGSTAmount', 'TotalTaxAmount',
+    'RoundOff', 'InvoiceTotal',
+  ],
 } as const;
 
 const PAYMENT_ADVICE_SCHEMA = {
@@ -164,9 +177,14 @@ const PAYMENT_ADVICE_SCHEMA = {
           Deduction: { type: 'NUMBER', nullable: true },
           Amount: { type: 'NUMBER', nullable: true },
         },
+        required: [
+          'PONo', 'DocNo', 'DocDate', 'GRNNo', 'InvoiceAmount', 'Deduction',
+          'Amount',
+        ],
       },
     },
   },
+  required: ['Payer', 'PaymentRef', 'PaymentDate', 'GrandTotal', 'References'],
 } as const;
 
 const GEMINI_RESPONSE_SCHEMA = {
@@ -221,12 +239,53 @@ For goods documents (TAX_INVOICE / DELIVERY_CHALLAN / EWAY_BILL) fill "goods" an
   - Items[]: the lines under that PO, each with:
     - ItemNo: item / part code (as string).
     - ItemDesc: the goods description.
-    - Rate: per-unit price (numeric).
-    - Qty: quantity (numeric).
+    - Rate: per-unit price (numeric) — the price of ONE unit, read from the column headed "Rate" / "Price" / "Unit Price".
+    - Qty: the BILLED quantity (numeric) — the number that Rate is charged against.
     - BatchNo: lot / batch number if present, else null.
+
+  CHOOSING Rate and Qty — line tables often carry SEVERAL numeric columns
+  (e.g. "No Of Bundle", "Qty Of Sheets", "UOM", "Weight", "Rate", "Taxable
+  Value"). Picking the wrong one silently corrupts the line, so:
+  - Let the UOM / unit column decide which column is the billed quantity. If UOM
+    is a weight (PER KG, KG, MT, GM), the billed Qty is the WEIGHT column — not
+    a bundle / carton / sheet / packet count. If UOM is PCS / NOS / SHEETS, the
+    billed Qty is that piece count. Packing counts ("No Of Bundle", "No Of
+    Cases", "Bundles") are NOT the quantity when they are not what Rate multiplies.
+  - VERIFY with arithmetic before answering: Rate × Qty must reproduce that
+    line's own amount (its "Taxable Value" / "Amount" / "Value" column), within
+    rounding. If it does not, you have grabbed the wrong column — try the other
+    numeric columns until the product reconciles, then report that pair.
+  - Once a reconciling pair is found, ASSIGN THE TWO ROLES CORRECTLY — do not
+    swap them. Rate is the value printed under the "Rate" header (in Indian
+    invoice tables it sits immediately BEFORE the amount / taxable-value
+    column); Qty is the measured amount of goods, matching the UOM. Rate is the
+    price of ONE unit of that UOM: for UOM PER KG, Rate is the price of a single
+    kilogram and Qty is the number of kilograms — e.g. a line reading
+    "PER KG | 724.00 | 96 | 69504.00" is Qty = 724 kg at Rate = 96/kg, NOT
+    Qty = 96 at Rate = 724.
+  - Never return a weight, a bundle count, or a line total as Rate.
+  - A quantity column reading 0 (a placeholder for a UOM the line does not use,
+    e.g. "Qty Of Sheets" = 0 on a per-kg line) is NOT the billed quantity — it
+    would make Rate × Qty = 0, which can never match the line amount.
 - Document-level tax summary (from the HSN/SAC tax table or the tax rows near the total — one set per document):
   - TaxableValue: the total taxable value (taxable amount before tax).
-  - CGSTRate / CGSTAmount, SGSTRate / SGSTAmount, IGSTRate / IGSTAmount: the % rate and the rupee amount for each tax head. Intra-state invoices have CGST + SGST (leave IGST null); inter-state invoices have IGST only (leave CGST/SGST null). Use null for any head not present.
+  - CGSTRate / CGSTAmount, SGSTRate / SGSTAmount, IGSTRate / IGSTAmount: the % rate and the rupee amount for each tax head.
+    - Only ONE regime applies per document. Decide which by comparing the first
+      two digits (the state code) of the supplier's GSTIN and the buyer's GSTIN:
+      SAME state code → intra-state → CGST + SGST apply, IGST does not.
+      DIFFERENT state codes → inter-state → IGST applies, CGST/SGST do not.
+      A non-zero amount printed under a head confirms it; 0.00 under a head
+      means that head is NOT levied.
+    - For every head that does NOT apply, set BOTH its rate and its amount to
+      null — not 0, and never carry a percentage over to it.
+    - Many invoices print ONE shared "GST Rate" / "Tax %" / "Rate %" column
+      (e.g. 18) rather than a separate percentage per head. Do NOT copy that one
+      figure into all three rate fields. Assign it only to the head(s) actually
+      levied. On an inter-state invoice a shared 18 means IGSTRate = 18. On an
+      intra-state invoice a shared 18 is the COMBINED rate and splits in half —
+      CGSTRate = 9 and SGSTRate = 9 — so check the printed CGST/SGST amounts
+      against TaxableValue to confirm whether the printed figure is the combined
+      rate or the per-head rate, and report the per-head rate.
   - TotalTaxAmount: total tax (CGST + SGST + IGST).
   - RoundOff: rounding adjustment near the grand total (may be negative), else null.
   - InvoiceTotal: the final grand total payable (taxable value + tax + round off).

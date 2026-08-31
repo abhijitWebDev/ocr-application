@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.abhijitdev.ocrsample",
+      "appleTeamId": "SETW3GYV79",
       "buildNumber": "1",
       "icon": "./assets/images/icon.png",
       "supportsTablet": false,
@@ -75,6 +76,7 @@
       "eas": {
         "projectId": "7f63c5d9-340d-461e-8c84-2fe17363808b"
       }
-    }
+    },
+    "owner": "abhijit-dev"
   }
 }

@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 16.0.0"
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -11,40 +12,46 @@
       }
     },
     "preview": {
+      "autoIncrement": true,
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "distribution": "internal"
       }
     },
     "preview-testflight": {
-      "distribution": "store",
+      "autoIncrement": true,
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "distribution": "store"
       }
     },
     "production": {
+      "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
       },
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "distribution": "store"
       }
     }
   },
   "submit": {
     "production": {
       "ios": {
-        "appleId": "your@apple.id",
-        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID",
-        "appleTeamId": "YOUR_APPLE_TEAM_ID"
+        "appleTeamId": "SETW3GYV79"
       },
       "android": {
         "serviceAccountKeyPath": "./google-play-service-account.json",
         "track": "production"
       }
+    },
+    "preview-testflight": {
+      "ios": {}
     }
   }
 }
